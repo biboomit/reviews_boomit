@@ -30,7 +30,6 @@ if selected_country and app_name:
     country = country_mapping[selected_country]
     
     if "reviews_data" not in st.session_state:
-        # Solo descargar si no está en la sesión
         with st.spinner("Descargando datos..."):
             search_results = search(app_name, lang="es", country=country)
             if search_results:
@@ -62,7 +61,7 @@ if selected_country and app_name:
     else:
         df_reviews = st.session_state["reviews_data"]
     
-    # KPIs
+    # **🔹 KPIs**
     st.markdown("---")
     st.markdown("<h3 style='text-align: center;'>📊 Métricas de la Aplicación</h3>", unsafe_allow_html=True)
     
@@ -81,10 +80,10 @@ if selected_country and app_name:
         st.markdown("<p style='text-align: center;'>🆕 Última actualización</p>", unsafe_allow_html=True)
         st.markdown(f"<h2 style='text-align: center;'>{app_data['lastUpdatedOn']}</h2>", unsafe_allow_html=True)
 
-    # Selector de nivel de detalle sin recargar toda la app
+    # **🔹 Selector de nivel de detalle**
     st.markdown("---")
     selected_view = st.radio("📊 **Selecciona el nivel de agregación:**", 
-                             ["Diario", "Semanal", "Mensual", "Anual"], horizontal=True)
+                             ["Diario", "Semanal", "Mensual", "Anual"], horizontal=True, index=1)  # "Semanal" por defecto
 
     @st.cache_data(ttl=3600)
     def aggregate_reviews(df, view):
@@ -103,16 +102,31 @@ if selected_country and app_name:
         grouped_avg_score = df.groupby("date")["score"].mean().reset_index(name="Calificación Promedio").sort_values(by="date")
         return grouped_counts, grouped_avg_score
 
-    # Obtener los datos agregados según la selección del usuario
     grouped_counts, grouped_avg_score = aggregate_reviews(df_reviews, selected_view)
 
-    # Gráfica de evolución de reseñas
+    # **🔹 Gráfica de evolución de reseñas**
     fig1 = go.Figure()
-    fig1.add_trace(go.Bar(x=grouped_counts['date'], y=grouped_counts['Cantidad de Reseñas'], 
-                          name='Cantidad de Reseñas', marker=dict(color='red'), opacity=0.6, yaxis='y1'))
-    fig1.add_trace(go.Scatter(x=grouped_avg_score['date'], y=grouped_avg_score['Calificación Promedio'], 
-                              mode='lines+markers', name='Calificación Promedio', 
-                              line=dict(color='blue', width=2), yaxis='y2'))
+    fig1.add_trace(go.Bar(
+        x=grouped_counts['date'], 
+        y=grouped_counts['Cantidad de Reseñas'], 
+        name='Cantidad de Reseñas', 
+        marker=dict(color='red'), 
+        opacity=0.6, 
+        yaxis='y1',
+        text=grouped_counts['Cantidad de Reseñas'], 
+        textposition='outside'
+    ))
+
+    fig1.add_trace(go.Scatter(
+        x=grouped_avg_score['date'], 
+        y=grouped_avg_score['Calificación Promedio'], 
+        mode='lines+markers+text',  
+        name='Calificación Promedio', 
+        line=dict(color='blue', width=2), 
+        yaxis='y2',
+        text=grouped_avg_score['Calificación Promedio'].round(2),  
+        textposition='top center'
+    ))
 
     fig1.update_layout(
         title="📈 Evolución de reseñas",
@@ -124,9 +138,10 @@ if selected_country and app_name:
 
     st.plotly_chart(fig1, use_container_width=True, key="fig1")
 
-    # Distribución y nube de palabras
+    # **🔹 Distribución de Calificaciones y Nube de Palabras**
     df_reviews['score_label'] = df_reviews['score'].apply(lambda x: f'{int(x)}⭐')
     fig_hist = px.histogram(df_reviews, x='score_label', nbins=5, title="📊 Distribución de Calificaciones")
+    fig_hist.update_layout(height=400)  
 
     text = " ".join(str(review) for review in df_reviews["content"].dropna())
     wordcloud = WordCloud(width=800, height=400, background_color='white', stopwords=custom_stopwords).generate(text)
@@ -134,7 +149,6 @@ if selected_country and app_name:
     col1, col2 = st.columns(2)
     with col1:
         st.plotly_chart(fig_hist, use_container_width=True, key="fig_hist")
-
     with col2:
         st.markdown("<h3 style='text-align: center;'>☁️ Nube de Palabras en Reseñas</h3>", unsafe_allow_html=True)
         st.image(wordcloud.to_array(), use_container_width=True, output_format="PNG")
