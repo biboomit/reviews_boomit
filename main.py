@@ -1,66 +1,33 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
 from wordcloud import WordCloud, STOPWORDS
 from google_play_scraper import app, reviews, search
 import time
 from datetime import datetime, timedelta
 
-# Configuración del diseño
+# Configuración de la página
 st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
 
 # Cargar stopwords desde un archivo externo
 with open("stopwords.txt", "r", encoding="utf-8") as f:
     custom_stopwords = set(word.strip() for word in f.readlines())
 
-# Estilos personalizados
-st.markdown("""
-    <style>
-        .title {
-            font-size: 30px;
-            font-weight: bold;
-            text-align: center;
-            color: #ffffff;
-        }
-        .comment-box {
-            padding: 12px;
-            background-color: #222222;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            color: white;
-            font-size: 14px;
-        }
-        .comment-group-title {
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 8px;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
 # Título del Dashboard
-st.markdown("<p class='title'>📊 Dashboard de Gestión - Google Play Store</p>", unsafe_allow_html=True)
+st.title("📊 Dashboard de Gestión - Google Play Store")
 
 # Selección del país
 country_mapping = {
     "Estados Unidos": "us", "Argentina": "ar", "México": "mx", "España": "es",
-    "Colombia": "co", "Chile": "cl", "Perú": "pe", "Brasil": "br",
-    "Francia": "fr", "Alemania": "de", "Italia": "it", "Reino Unido": "gb",
-    "Canadá": "ca", "Uruguay": "uy", "Nicaragua": "ni", "Ecuador": "ec",
-    "Panamá": "pa", "Costa Rica": "cr", "Paraguay": "py"
+    "Colombia": "co", "Chile": "cl", "Perú": "pe", "Brasil": "br"
 }
 
 selected_country = st.selectbox("🌍 Seleccione el país de la tienda:", list(country_mapping.keys()))
+app_name = st.text_input("🔎 Ingrese el nombre de la aplicación:")
 
-if selected_country:
+if selected_country and app_name:
     country = country_mapping[selected_country]
-    app_name = st.text_input("🔎 Ingrese el nombre de la aplicación:")
-else:
-    country = None
-    app_name = None
-
-if country and app_name and app_name.strip():
     search_results = search(app_name, lang="es", country=country)
     
     if search_results:
@@ -68,111 +35,101 @@ if country and app_name and app_name.strip():
         st.success(f"✅ Aplicación encontrada: {search_results[0]['title']} (ID: {app_id}) en {country.upper()}")
 
         app_data = app(app_id, lang='es', country=country)
-
         all_reviews = []
         continuation_token = None
-        max_iterations = 50
-        iteration = 0
+        max_iterations = 10  # Limitar iteraciones para evitar bucles infinitos
+        progress_bar = st.progress(0)
 
-        while iteration < max_iterations:
+        for i in range(max_iterations):
             try:
                 result, continuation_token = reviews(
-                    app_id, lang='es', country=country, count=200, continuation_token=continuation_token)
+                    app_id, lang='es', country=country, count=200, continuation_token=continuation_token
+                )
                 all_reviews.extend(result)
-                if not continuation_token or len(result) == 0:
+                progress_bar.progress((i + 1) / max_iterations)
+                if not continuation_token:
                     break
                 time.sleep(2)
-                iteration += 1
             except Exception as e:
                 st.error(f"Error al obtener reseñas: {e}")
                 break
-
+        
+        progress_bar.empty()
         df_reviews = pd.DataFrame(all_reviews)
+        cutoff_date = datetime.today() - timedelta(days=180)
+        df_reviews["at"] = pd.to_datetime(df_reviews["at"])
+        df_reviews = df_reviews[df_reviews["at"] >= cutoff_date]
 
-        if not df_reviews.empty:
-            # Datos de la aplicación
-            app_info = {
-                "Title": app_data["title"], "Genre": app_data["genre"], "Score": app_data["score"],
-                "Reviews": app_data["reviews"], "Installs": app_data["installs"], "Developer": app_data["developer"],
-                "Release Date": app_data["released"], "Last Updated": app_data["lastUpdatedOn"], "Version": app_data["version"],
-                "Icon": app_data["icon"]
-            }
+        # Evolutivo de opiniones por día
+        df_reviews["date"] = df_reviews["at"].dt.date  # Cambiar la agregación a diaria
+        df_reviews["date"] = pd.to_datetime(df_reviews["date"])  # Asegurar que sea formato de fecha
 
-            # 📥 Botón de descarga arriba de todo
-            st.markdown("---")
-            st.subheader("📥 Descargar datos de reseñas")
+        # Agrupación diaria
+        daily_counts = df_reviews.groupby("date").size().reset_index(name="Cantidad de Reseñas").sort_values(by="date")
+        daily_avg_score = df_reviews.groupby("date")["score"].mean().reset_index(name="Calificación Promedio").sort_values(by="date")
 
-            csv = df_reviews.to_csv(index=False).encode("utf-8")
-            excel_filename = "reseñas_google_play.xlsx"
-            df_reviews.to_excel(excel_filename, index=False, engine='xlsxwriter')
+        fig1 = go.Figure()
 
-            col7, col8 = st.columns(2)
-            with col7:
-                st.download_button("📄 Descargar CSV", data=csv, file_name="reseñas_google_play.csv", mime="text/csv")
+        # Barras de cantidad de reseñas
+        fig1.add_trace(go.Bar(x=daily_counts['date'], y=daily_counts['Cantidad de Reseñas'], 
+                            name='Cantidad de Reseñas', marker=dict(color='red'), opacity=0.6, yaxis='y1'))
 
-            with col8:
-                with open(excel_filename, "rb") as excel_file:
-                    st.download_button("📊 Descargar Excel", data=excel_file, file_name=excel_filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        # Línea de calificación promedio
+        fig1.add_trace(go.Scatter(x=daily_avg_score['date'], y=daily_avg_score['Calificación Promedio'], 
+                                mode='lines+markers', name='Calificación Promedio', 
+                                line=dict(color='blue', width=2), yaxis='y2'))
 
-            # 📊 KPIs de la App
-            st.markdown("---")
-            col1, col2, col3, col4 = st.columns([1.5, 2, 2, 2])
+        # Configuración del gráfico
+        fig1.update_layout(
+            title="📈 Evolución de reseñas diaria",
+            yaxis=dict(title='Cantidad de Reseñas', side='left'),
+            yaxis2=dict(title='Calificación Promedio', overlaying='y', side='right'),
+            legend=dict(orientation='h', yanchor='bottom', y=0.95, xanchor='center', x=0.5)
+        )
 
-            with col1:
-                st.image(app_info["Icon"], width=120)
-                st.subheader(app_info["Title"])
-                st.write(f"📌 Género: {app_info['Genre']}")
-                st.write(f"⭐ Puntuación: {app_info['Score']} / 5")
-                st.write(f"💬 Total Reseñas: {app_info['Reviews']}")
-                st.write(f"📥 Descargas: {app_info['Installs']}")
-                st.write(f"👨‍💻 Desarrollador: {app_info['Developer']}")
-                st.write(f"📅 Lanzamiento: {app_info['Release Date']}")
-                st.write(f"🆕 Última actualización: {app_info['Last Updated']}")
-                st.write(f"📌 Versión: {app_info['Version']}")
+        # Ajustar el eje X cronológicamente
+        fig1.update_xaxes(tickangle=-45, tickformat='%d-%m-%Y')
 
-            # 💬 Sección de comentarios
-            today = datetime.today().strftime('%Y-%m-%d')
-            last_15_days = (datetime.today() - timedelta(days=15)).strftime('%Y-%m-%d')
+        # **🔹 KPIs PRIMERO**
+        st.markdown("---")
+        st.markdown("<h3 style='text-align: center;'>📊 Métricas de la Aplicación</h3>", unsafe_allow_html=True)
 
-            recent_comments = df_reviews.nlargest(5, 'at')
-            last_15_comments = df_reviews[df_reviews['at'].astype(str) >= last_15_days]
-            best_comments = last_15_comments.nlargest(5, 'score')
-            worst_comments = last_15_comments.nsmallest(5, 'score')
+        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+        with col_kpi1:
+            st.markdown("<p style='text-align: center;'>⭐ Puntuación Promedio</p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='text-align: center;'>{round(app_data['score'], 2)}</h2>", unsafe_allow_html=True)
+        with col_kpi2:
+            st.markdown("<p style='text-align: center;'>💬 Total Reseñas</p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='text-align: center;'>{app_data['reviews']:,}</h2>", unsafe_allow_html=True)
+        with col_kpi3:
+            st.markdown("<p style='text-align: center;'>📥 Descargas</p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='text-align: center;'>{app_data['installs']}</h2>", unsafe_allow_html=True)
+        with col_kpi4:
+            st.markdown("<p style='text-align: center;'>🆕 Última actualización</p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='text-align: center;'>{app_data['lastUpdatedOn']}</h2>", unsafe_allow_html=True)
 
-            with col2:
-                st.markdown("<p class='comment-group-title'>🕒 Comentarios más recientes</p>", unsafe_allow_html=True)
-                for _, row in recent_comments.iterrows():
-                    st.markdown(f"<div class='comment-box'>⭐ {row['score']} - {row['content']}<br><small>{row['at']}</small></div>", unsafe_allow_html=True)
+        # **🔹 EVOLUCIÓN SEGUNDO**
+        st.markdown("---")
+        st.plotly_chart(fig1, use_container_width=True, key="fig1")
 
-            with col3:
-                st.markdown("<p class='comment-group-title'>👍 Top 5 comentarios positivos (últimos 15 días)</p>", unsafe_allow_html=True)
-                for _, row in best_comments.iterrows():
-                    st.markdown(f"<div class='comment-box'>⭐ {row['score']} - {row['content']}<br><small>{row['at']}</small></div>", unsafe_allow_html=True)
+        # **🔹 DISTRIBUCIÓN Y NUBE AL FINAL**
+        df_reviews['score_label'] = df_reviews['score'].apply(lambda x: f'{int(x)}⭐')
+        fig_hist = px.histogram(df_reviews, x='score_label', nbins=5, title="📊 Distribución de Calificaciones")
+        fig_hist.update_layout(height=400)  # Asegurar que tenga la misma altura que la nube de palabras
 
-            with col4:
-                st.markdown("<p class='comment-group-title'>👎 Top 5 comentarios negativos (últimos 15 días)</p>", unsafe_allow_html=True)
-                for _, row in worst_comments.iterrows():
-                    st.markdown(f"<div class='comment-box'>⭐ {row['score']} - {row['content']}<br><small>{row['at']}</small></div>", unsafe_allow_html=True)
+        # Nube de palabras
+        text = " ".join(str(review) for review in df_reviews["content"].dropna())
+        wordcloud = WordCloud(width=800, height=400, background_color='white', stopwords=custom_stopwords).generate(text)
+        
+        col1, col2 = st.columns(2)
 
-            # 📊 Gráficos (bajo los comentarios)
-            st.markdown("---")
-            col5, col6 = st.columns(2)
+        with col1:
+            st.plotly_chart(fig_hist, use_container_width=True, key="fig_hist")
 
-            with col5:
-                st.subheader("📊 Distribución de Calificaciones")
-                if "score" in df_reviews.columns and not df_reviews["score"].isna().all():
-                    fig, ax = plt.subplots(figsize=(6, 4))
-                    sns.countplot(x=df_reviews["score"], palette="Blues", ax=ax)
-                    ax.set_xlabel("Calificación")
-                    ax.set_ylabel("Cantidad")
-                    ax.set_title("⭐ Distribución de Calificaciones")
-                    st.pyplot(fig)
+        with col2:
+            st.markdown("<h3 style='text-align: center;'>☁️ Nube de Palabras en Reseñas</h3>", unsafe_allow_html=True)
+            st.image(wordcloud.to_array(), use_container_width=True, output_format="PNG")
 
-            with col6:
-                st.subheader("☁️ Nube de Palabras en Reseñas")
-                text = " ".join(str(review) for review in df_reviews["content"].dropna())
-                wordcloud = WordCloud(width=600, height=400, background_color='white', stopwords=custom_stopwords, max_words=50).generate(text)
-                fig, ax = plt.subplots(figsize=(6, 4))
-                ax.imshow(wordcloud, interpolation='bilinear')
-                ax.axis("off")
-                st.pyplot(fig)
+        # Descargar datos
+        csv = df_reviews.to_csv(index=False).encode("utf-8")
+        st.download_button("📄 Descargar CSV", data=csv, file_name="reseñas_google_play.csv", mime="text/csv")
