@@ -7,12 +7,6 @@ from google_play_scraper import app, reviews, search
 import time
 import base64 
 from datetime import datetime, timedelta
-import openai
-
-
-# Inicializar df_reviews como un DataFrame vacío con las columnas necesarias
-df_reviews = pd.DataFrame(columns=["at", "score", "content"])
-
 
 # Configuración de la página
 st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
@@ -77,15 +71,34 @@ if selected_country and app_name:
                         st.error(f"Error al obtener reseñas: {e}")
                         break
 
-            if all_reviews:  # Solo guardamos si hay datos
-                df_reviews = pd.DataFrame(all_reviews)
-                df_reviews["at"] = pd.to_datetime(df_reviews["at"])
-                df_reviews = df_reviews[df_reviews["at"] >= datetime.today() - timedelta(days=90)]
-                
-                # Guardar en la sesión de Streamlit
-                st.session_state["df_reviews"] = df_reviews  
+            df_reviews = pd.DataFrame(all_reviews)
+            df_reviews["at"] = pd.to_datetime(df_reviews["at"])
+            df_reviews = df_reviews[df_reviews["at"] >= datetime.today() - timedelta(days=180)]
+            
+            st.session_state["df_reviews"] = df_reviews  
 
         df_reviews = st.session_state["df_reviews"]
+
+        # **MÉTRICAS PRINCIPALES**
+        st.markdown("---")
+        st.markdown("<h3 style='text-align: center;'>📊 Métricas de la Aplicación</h3>", unsafe_allow_html=True)
+
+        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+        with col_kpi1:
+            st.markdown("<p style='text-align: center;'>⭐ Puntuación Promedio</p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='text-align: center;'>{round(app_data['score'], 2)}</h2>", unsafe_allow_html=True)
+        with col_kpi2:
+            st.markdown("<p style='text-align: center;'>💬 Total Reseñas</p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='text-align: center;'>{app_data['reviews']:,}</h2>", unsafe_allow_html=True)
+        with col_kpi3:
+            st.markdown("<p style='text-align: center;'>📥 Descargas</p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='text-align: center;'>{app_data['installs']}</h2>", unsafe_allow_html=True)
+        with col_kpi4:
+            st.markdown("<p style='text-align: center;'>🆕 Última actualización</p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='text-align: center;'>{app_data['lastUpdatedOn']}</h2>", unsafe_allow_html=True)
+
+        # **Línea separadora después de los KPIs y antes del filtro de fechas**
+        st.markdown("---")
 
         # **FILTRO DE FECHAS**
         col1, col2 = st.columns(2)
@@ -94,39 +107,7 @@ if selected_country and app_name:
         with col2:
             end_date = st.date_input("📅 Hasta:", df_reviews["at"].max())
 
-        # Filtrar df_reviews basado en la selección de fechas
-        df_filtered = df_reviews[(df_reviews["at"] >= pd.to_datetime(start_date)) & (df_reviews["at"] <= pd.to_datetime(end_date))]
-
-        # **Recalcular KPIs con el nuevo df_filtered**
-        if not df_filtered.empty:
-            avg_score = df_filtered["score"].mean()  # Puntuación promedio
-            total_reviews = df_filtered.shape[0]  # Total de reseñas en el período seleccionado
-
-            # Última actualización basada en la fecha más reciente del filtro
-            last_update = df_filtered["at"].max().strftime("%Y-%m-%d")
-
-            # Actualizar las métricas en las tarjetas
-            st.markdown("---")
-            st.markdown("<h3 style='text-align: center;'>📊 Métricas de la Aplicación</h3>", unsafe_allow_html=True)
-
-            col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-            with col_kpi1:
-                st.markdown("<p style='text-align: center;'>⭐ Puntuación Promedio</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{round(avg_score, 2)}</h2>", unsafe_allow_html=True)
-            with col_kpi2:
-                st.markdown("<p style='text-align: center;'>💬 Total Reseñas</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{total_reviews:,}</h2>", unsafe_allow_html=True)
-            with col_kpi3:
-                st.markdown("<p style='text-align: center;'>📥 Descargas</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>No disponible</h2>", unsafe_allow_html=True)  # No se puede obtener de df_reviews
-            with col_kpi4:
-                st.markdown("<p style='text-align: center;'>🆕 Última actualización</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{last_update}</h2>", unsafe_allow_html=True)
-        else:
-            st.warning("No hay datos en el rango de fechas seleccionado.")
-
-        # Línea separadora antes de la selección de agregación
-        st.markdown("---")    
+        df_reviews = df_reviews[(df_reviews["at"] >= pd.to_datetime(start_date)) & (df_reviews["at"] <= pd.to_datetime(end_date))]
 
         # **Selector de agregación**
         st.markdown("### 📊 Selecciona el nivel de agregación:")
@@ -221,25 +202,18 @@ if selected_country and app_name:
         st.markdown("---")
         comment_option = st.selectbox("📌 Selecciona tipo de comentarios:", ["Recientes", "Mejores", "Peores"])
 
-        if not df_filtered.empty:
-            if comment_option == "Recientes":
-                comments = df_filtered[['at', 'score', 'content']].sort_values(by='at', ascending=False).head(10)
-            elif comment_option == "Mejores":
-                comments = df_filtered[['score', 'content', 'at']].sort_values(by='score', ascending=False).head(10)
-            else:
-                comments = df_filtered[['score', 'content', 'at']].sort_values(by='score', ascending=True).head(10)
-
-            # **Convertir la columna "score" en estrellas**
-            comments["score"] = comments["score"].apply(lambda x: "⭐" * int(x))
-
-            # **Renombrar columnas**
-            comments = comments.rename(columns={"at": "Fecha", "content": "Comentario", "score": "Calificación"})
-
-            # **Mostrar la tabla si hay comentarios**
-            st.dataframe(comments, hide_index=True, use_container_width=True)
+        if comment_option == "Recientes":
+            comments = df_reviews[['at', 'score', 'content']].sort_values(by='at', ascending=False).head(10)
+        elif comment_option == "Mejores":
+            comments = df_reviews[['score', 'content', 'at']].sort_values(by='score', ascending=False).head(10)
         else:
-            st.warning("No hay comentarios en el rango de fechas seleccionado.")
+            comments = df_reviews[['score', 'content', 'at']].sort_values(by='score', ascending=True).head(10)
 
+        # **Convertir la columna "score" en estrellas**
+        comments["score"] = comments["score"].apply(lambda x: "⭐" * int(x))
+
+        # **Renombrar columnas**
+        comments = comments.rename(columns={"at": "Fecha", "content": "Comentario", "score": "Calificación"})
 
         # **Estilos para ajustar ancho fijo en las dos primeras columnas y expandir la tercera**
         styled_df = comments.style.set_table_styles([
@@ -250,68 +224,11 @@ if selected_country and app_name:
             {"selector": "td:nth-child(3)", "props": [("width", "auto"), ("white-space", "normal"), ("word-wrap", "break-word")]}  # Expandir "Comentario"
         ])
 
-
-# Configuración de OpenAI
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-openai.api_key = OPENAI_API_KEY
-
-if not df_reviews.empty:
-            # **Análisis con Asistente de OpenAI**
-            st.markdown("---")
-            st.markdown("### 🤖 Análisis de OpenAI sobre las Reseñas")
-
-            if "content" in df_reviews.columns:
-                filtered_reviews = df_reviews[(df_reviews["at"] >= pd.to_datetime(start_date)) & (df_reviews["at"] <= pd.to_datetime(end_date))]
-                date_range_text = f"Las siguientes reviews corresponden al período desde {start_date} hasta {end_date}.\n\n"
-                comments_text = date_range_text + "\n".join(filtered_reviews["content"].dropna().head(50).tolist()).strip()
+        # **Mostrar la tabla con los estilos aplicados**
+        st.dataframe(styled_df, hide_index=True, use_container_width=True, height=None)
 
 
-                
-                if comments_text:  # Solo llamar a OpenAI si hay contenido válido
-                    OPENAI_API_KEY = "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"  # Reemplaza con tu clave de OpenAI
-                    openai.api_key = OPENAI_API_KEY
-                    
-                    def get_openai_insights(comments_text):
-                        """Genera insights a partir de los comentarios usando un asistente preexistente de OpenAI"""
-                        try:
-                            client = openai.OpenAI(api_key=OPENAI_API_KEY)  # Crear cliente de OpenAI
 
-                            # Crear un hilo de conversación
-                            thread = client.beta.threads.create()
 
-                            # Enviar mensaje al asistente en el hilo creado
-                            client.beta.threads.messages.create(
-                                thread_id=thread.id,
-                                role="user",
-                                content=comments_text
-                            )
-
-                            # Ejecutar el asistente en el hilo
-                            run = client.beta.threads.runs.create(
-                                thread_id=thread.id,
-                                assistant_id=st.secrets["ASSISTANT_ID"]
-                            )
-
-                            # Mostrar indicador de carga
-                            with st.spinner("🔄 Generando insights, por favor espera..."):
-                                # Esperar la respuesta del asistente
-                                while run.status != "completed":
-                                    time.sleep(2)  # Espera 2 segundos antes de revisar el estado nuevamente
-                                    run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-
-                            # Obtener el mensaje de respuesta del asistente
-                            messages = client.beta.threads.messages.list(thread_id=thread.id)
-                            response_text = messages.data[0].content[0].text.value  # Extraer contenido
-
-                            return response_text
-
-                        except Exception as e:
-                            return f"Error al obtener insights de OpenAI: {e}"
-                    
-                    insights = get_openai_insights(comments_text)
-                    st.markdown("#### 🔍 Insights Generados")
-                    st.info(insights)
-                else:
-                    st.warning("No hay suficientes comentarios para generar insights.")
 
 
