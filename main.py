@@ -268,7 +268,7 @@ if not df_reviews.empty:
 
                 
                 if comments_text:  # Solo llamar a OpenAI si hay contenido válido
-                    OPENAI_API_KEY = "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"  # Reemplaza con tu clave de OpenAI
+                    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]  # Reemplaza con tu clave de OpenAI
                     openai.api_key = OPENAI_API_KEY
                     
                     def get_openai_insights(comments_text):
