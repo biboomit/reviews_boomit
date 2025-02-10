@@ -258,7 +258,7 @@ openai.api_key = OPENAI_API_KEY
 if not df_reviews.empty:
             # **Análisis con Asistente de OpenAI**
             st.markdown("---")
-            st.markdown("### 🤖 Análisis de OpenAI sobre las Reseñas")
+            st.markdown("### 🤖 Análisis de Boomit One AI sobre las Reseñas")
 
             if "content" in df_reviews.columns:
                 filtered_reviews = df_reviews[(df_reviews["at"] >= pd.to_datetime(start_date)) & (df_reviews["at"] <= pd.to_datetime(end_date))]
