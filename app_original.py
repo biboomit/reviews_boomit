@@ -10,53 +10,12 @@ from datetime import datetime, timedelta
 import openai
 
 
-# 🔹 **Configurar la página antes de cualquier otro código**
-st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
-
-# 🔹 **Cargar credenciales desde `st.secrets`**
-try:
-    USERS = dict(st.secrets["users"])  # Convertir `st.secrets` en diccionario
-except Exception:
-    st.error("❌ Error al cargar las credenciales. Verifica `secrets.toml`.")
-    st.stop()
-
-# 🔹 **Función de login**
-def login():
-    st.title("🔐 Iniciar sesión")
-
-    username = st.text_input("Usuario", key="user_input")
-    password = st.text_input("Contraseña", type="password", key="pass_input", help="Ingrese su contraseña")
-    login_button = st.button("Ingresar")
-
-    if login_button:
-        if username in USERS and USERS[username] == password:
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = username
-            st.rerun()  # 🔹 **Refrescamos la app**
-        else:
-            st.error("❌ Usuario o contraseña incorrectos")
-
-# 🔹 **Verificar si el usuario está autenticado**
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-
-if not st.session_state["authenticated"]:
-    login()
-    st.stop()  # 🔹 **Detenemos la ejecución si no está autenticado**
-
-# 🔹 **Si el usuario está autenticado, mostramos el Dashboard**
-st.success(f"✅ Bienvenido, {st.session_state['username']}")
-
-
-
-
-
-
-
-
 # Inicializar df_reviews como un DataFrame vacío con las columnas necesarias
 df_reviews = pd.DataFrame(columns=["at", "score", "content"])
 
+
+# Configuración de la página
+st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
 
 # Cargar stopwords desde un archivo externo
 with open("stopwords.txt", "r", encoding="utf-8") as f:
