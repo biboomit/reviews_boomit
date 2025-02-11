@@ -67,8 +67,19 @@ st.markdown(f"""
 
 # Selección del país y app
 country_mapping = {
-    "Estados Unidos": "us", "Argentina": "ar", "México": "mx", "España": "es",
-    "Colombia": "co", "Chile": "cl", "Perú": "pe", "Brasil": "br"
+    "Argentina": "ar",
+    "Chile": "cl",
+    "Colombia": "co",
+    "Ecuador": "ec",
+    "El Salvador": "sv",
+    "Estados Unidos": "us",
+    "Guatemala": "gt",
+    "Honduras": "hn",
+    "México": "mx",
+    "Nicaragua": "ni",
+    "Panamá": "pa",
+    "Paraguay": "py",
+    "Perú": "pe"
 }
 
 col1, col2 = st.columns(2)
