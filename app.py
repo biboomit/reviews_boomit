@@ -102,11 +102,15 @@ if selected_country and app_name:
         st.success(f"✅ Aplicación encontrada: {search_results[0]['title']} (ID: {app_id}) en {country.upper()}")
 
         app_data = app(app_id, lang='es', country=country)
-        timestamp = app_data.get("updated", None)  # Puede devolver un número o None
+        # Obtener número de descargas (instalaciones)
+        downloads = app_data.get("installs", "No disponible")  
+
+        # Última fecha de actualización de la app
+        timestamp = app_data.get("updated", None)
 
 
         # Convertir el timestamp a fecha legible
-        if isinstance(timestamp, int):  # Verifica que sea un número
+        if isinstance(timestamp, int):  
             last_release_date = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
         else:
             last_release_date = "No disponible"
@@ -166,27 +170,66 @@ if selected_country and app_name:
             st.markdown("---")
             st.markdown("<h3 style='text-align: center;'>📊 Métricas de la Aplicación</h3>", unsafe_allow_html=True)
 
+            # Definir las columnas para los KPIs
             col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
-            
+
+            # Inyectar los estilos CSS globalmente
+            st.markdown("""
+                <style>
+                    .kpi-box {
+                        background-color: rgba(255, 100, 100, 0.9); /* Color rojo intenso con transparencia */
+                        padding: 15px;
+                        border-radius: 20px; /* Bordes redondeados */
+                        text-align: center;
+                        font-weight: bold;
+                        box-shadow: 4px 4px 10px rgba(0,0,0,0.2); /* Sombra sutil */
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        height: 120px; /* Altura uniforme */
+                        width: 100%;
+                    }
+                    .kpi-title {
+                        font-size: 20px; /* Título más grande */
+                        color: #fff;
+                        font-weight: bold;
+                        text-align: center;
+                    }
+                    .kpi-value {
+                        font-size: 24px; /* Valor más pequeño */
+                        color: #fff;
+                        font-weight: bold;
+                        text-align: center;
+                        margin-top: 5px;
+                    }
+                </style>
+            """, unsafe_allow_html=True)
+
+            # Función para crear los KPIs con formato corregido
+            def render_kpi(title, value):
+                return f"""
+                    <div class="kpi-box">
+                        <div class="kpi-title">{title}</div>
+                        <div class="kpi-value">{value}</div>
+                    </div>
+                """
+
+            # Renderizar los KPIs dentro de cada columna
             with col_kpi1:
-                st.markdown("<p style='text-align: center;'>⭐ Puntuación Promedio</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{round(avg_score, 2)}</h2>", unsafe_allow_html=True)
+                st.markdown(render_kpi("⭐ Puntuación", round(avg_score, 2)), unsafe_allow_html=True)
 
             with col_kpi2:
-                st.markdown("<p style='text-align: center;'>💬 Total Reseñas</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{total_reviews:,}</h2>", unsafe_allow_html=True)
+                st.markdown(render_kpi("💬 Reseñas", f"{total_reviews:,}"), unsafe_allow_html=True)
 
             with col_kpi3:
-                st.markdown("<p style='text-align: center;'>📥 Descargas</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>No disponible</h2>", unsafe_allow_html=True)  # No se puede obtener de df_reviews
+                st.markdown(render_kpi("📥 Descargas", downloads), unsafe_allow_html=True)  # Aquí se muestra el número real de descargas
 
             with col_kpi4:
-                st.markdown("<p style='text-align: center;'>🆕 Último Release</p>", unsafe_allow_html=True)  # Corrección aquí
-                st.markdown(f"<h2 style='text-align: center;'>{last_release_date}</h2>", unsafe_allow_html=True)
+                st.markdown(render_kpi("🆕 Last Release", last_release_date), unsafe_allow_html=True)
 
             with col_kpi5:
-                st.markdown("<p style='text-align: center;'>📅 Review más reciente</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{most_recent_review_date}</h2>", unsafe_allow_html=True)
+                st.markdown(render_kpi("📅 Last Review", most_recent_review_date), unsafe_allow_html=True)
 
         else:
             st.warning("No hay datos en el rango de fechas seleccionado.")

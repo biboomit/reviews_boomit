@@ -5,17 +5,50 @@ import plotly.express as px
 from wordcloud import WordCloud
 from google_play_scraper import app, reviews, search
 import time
-import base64 
+import base64
 from datetime import datetime, timedelta
 import openai
 
+# 🔹 **Configurar la página antes de cualquier otro código**
+st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
+
+# 🔹 **Cargar credenciales desde `st.secrets`**
+try:
+    USERS = dict(st.secrets["users"])  # Convertir `st.secrets` en diccionario
+except Exception:
+    st.error("❌ Error al cargar las credenciales. Verifica `secrets.toml`.")
+    st.stop()
+
+# 🔹 **Función de login**
+def login():
+    st.title("🔐 Iniciar sesión")
+    username = st.text_input("Correo electrónico", key="user_input")
+    password = st.text_input("Contraseña", type="password", key="pass_input", help="Ingrese su contraseña")
+    login_button = st.button("Ingresar")
+
+    if login_button:
+        if username in st.secrets["users"] and st.secrets["users"][username] == password:
+            st.session_state["authenticated"] = True
+            st.session_state["username"] = username
+            st.session_state["show_welcome"] = True  # Inicializar mensaje de bienvenida
+            st.rerun()  
+        else:
+            st.error("❌ Correo o contraseña incorrectos")
+
+# 🔹 **Verificar si el usuario está autenticado**
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+
+if not st.session_state["authenticated"]:
+    login()
+    st.stop()  # 🔹 **Detenemos la ejecución si no está autenticado**
+
+# 🔹 **Mostrar mensaje de bienvenida solo si `show_welcome` es True**
+if st.session_state.get("show_welcome", False):
+    st.success(f"✅ Bienvenido, {st.session_state['username']}")
 
 # Inicializar df_reviews como un DataFrame vacío con las columnas necesarias
 df_reviews = pd.DataFrame(columns=["at", "score", "content"])
-
-
-# Configuración de la página
-st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
 
 # Cargar stopwords desde un archivo externo
 with open("stopwords.txt", "r", encoding="utf-8") as f:
@@ -32,23 +65,35 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-
-# Título del Dashboard
-#st.title("📊 Dashboard de Gestión - Google Play Store")
-
 # Selección del país y app
 country_mapping = {
-    "Estados Unidos": "us", "Argentina": "ar", "México": "mx", "España": "es",
-    "Colombia": "co", "Chile": "cl", "Perú": "pe", "Brasil": "br"
+    "Argentina": "ar",
+    "Chile": "cl",
+    "Colombia": "co",
+    "Ecuador": "ec",
+    "El Salvador": "sv",
+    "Estados Unidos": "us",
+    "Guatemala": "gt",
+    "Honduras": "hn",
+    "México": "mx",
+    "Nicaragua": "ni",
+    "Panamá": "pa",
+    "Paraguay": "py",
+    "Perú": "pe"
 }
 
 col1, col2 = st.columns(2)
 with col1:
-    selected_country = st.selectbox("🌍 Seleccione el país de la tienda:", list(country_mapping.keys()))
+    selected_country = st.selectbox("🌍 Seleccione el país de la tienda:", list(country_mapping.keys()), key="selected_country")
 with col2:
-    app_name = st.text_input("🔎 Ingrese el nombre de la aplicación:")
+    app_name = st.text_input("🔎 Ingrese el nombre de la aplicación:", key="app_name")
 
+# 🔹 **Cuando el usuario elige un país y una app, ocultar el mensaje de bienvenida**
 if selected_country and app_name:
+    if st.session_state.get("show_welcome", False):  # Verifica si el mensaje de bienvenida sigue activo
+        st.session_state["show_welcome"] = False  # Ocultar mensaje de bienvenida
+        st.rerun()  # 🔹 **Forzar actualización de la página**
+
     country = country_mapping[selected_country]
     search_results = search(app_name, lang="es", country=country)
 
@@ -57,6 +102,20 @@ if selected_country and app_name:
         st.success(f"✅ Aplicación encontrada: {search_results[0]['title']} (ID: {app_id}) en {country.upper()}")
 
         app_data = app(app_id, lang='es', country=country)
+        st.write("Datos obtenidos de app_data:", app_data)
+        num_downloads = app_data.get("realInstalls", "No disponible")  # realInstalls es más preciso
+        timestamp = app_data.get("updated", None) 
+
+        # Convertir `updated` a fecha legible
+        if isinstance(timestamp, int):
+            last_release_date = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+        else:
+            last_release_date = "No disponible"
+
+        # Guardar valores en sesión para persistencia
+        st.session_state["num_downloads"] = num_downloads
+        st.session_state["last_release_date"] = last_release_date
+
         
         if "df_reviews" not in st.session_state:
             all_reviews = []
@@ -82,6 +141,9 @@ if selected_country and app_name:
                 df_reviews["at"] = pd.to_datetime(df_reviews["at"])
                 df_reviews = df_reviews[df_reviews["at"] >= datetime.today() - timedelta(days=90)]
                 
+                # Agregar descargas al DataFrame en cada fila para poder filtrarlas luego
+                df_reviews["installs"] = num_downloads if isinstance(num_downloads, (int, float)) else 0
+
                 # Guardar en la sesión de Streamlit
                 st.session_state["df_reviews"] = df_reviews  
 
@@ -94,10 +156,28 @@ if selected_country and app_name:
         with col2:
             end_date = st.date_input("📅 Hasta:", df_reviews["at"].max())
 
+        #Verificar que installs realmente está en df_reviews
+        st.write("Columnas de df_reviews antes de filtrar:", df_reviews.columns)
+        st.write("Vista previa de df_reviews:", df_reviews.head())
         # Filtrar df_reviews basado en la selección de fechas
         df_filtered = df_reviews[(df_reviews["at"] >= pd.to_datetime(start_date)) & (df_reviews["at"] <= pd.to_datetime(end_date))]
 
-        # **Recalcular KPIs con el nuevo df_filtered**
+        # Calcular descargas aproximadas basadas en reseñas dentro del período seleccionado
+        if not df_filtered.empty:
+            total_reviews = df_reviews.shape[0]  # Total de reseñas en todo el período
+            filtered_reviews_count = df_filtered.shape[0]  # Reseñas dentro del rango filtrado
+
+            # Estimación de descargas basadas en la proporción de reseñas en el período filtrado
+            if total_reviews > 0:
+                num_downloads_filtered = int((filtered_reviews_count / total_reviews) * st.session_state["num_downloads"])
+            else:
+                num_downloads_filtered = "No disponible"
+        else:
+            num_downloads_filtered = "No disponible"
+
+
+
+        # Verificar si hay datos en el rango seleccionado
         if not df_filtered.empty:
             avg_score = df_filtered["score"].mean()  # Puntuación promedio
             total_reviews = df_filtered.shape[0]  # Total de reseñas en el período seleccionado
@@ -105,23 +185,35 @@ if selected_country and app_name:
             # Última actualización basada en la fecha más reciente del filtro
             last_update = df_filtered["at"].max().strftime("%Y-%m-%d")
 
+            # 📅 Nueva métrica: Fecha del comentario más reciente basado en el filtro de fechas
+            most_recent_review_date = df_filtered["at"].max().strftime("%Y-%m-%d %H:%M") if not df_filtered.empty else "No disponible"
+
             # Actualizar las métricas en las tarjetas
             st.markdown("---")
             st.markdown("<h3 style='text-align: center;'>📊 Métricas de la Aplicación</h3>", unsafe_allow_html=True)
 
-            col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+            col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
+            
             with col_kpi1:
-                st.markdown("<p style='text-align: center;'>⭐ Puntuación Promedio</p>", unsafe_allow_html=True)
+                st.markdown("<h3 style='text-align: center; font-size:22px;'>⭐ Puntuación</h3>", unsafe_allow_html=True)
                 st.markdown(f"<h2 style='text-align: center;'>{round(avg_score, 2)}</h2>", unsafe_allow_html=True)
+
             with col_kpi2:
-                st.markdown("<p style='text-align: center;'>💬 Total Reseñas</p>", unsafe_allow_html=True)
+                st.markdown("<h3 style='text-align: center; font-size:22px;'>💬 Total Reseñas</h3>", unsafe_allow_html=True)
                 st.markdown(f"<h2 style='text-align: center;'>{total_reviews:,}</h2>", unsafe_allow_html=True)
+
             with col_kpi3:
-                st.markdown("<p style='text-align: center;'>📥 Descargas</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>No disponible</h2>", unsafe_allow_html=True)  # No se puede obtener de df_reviews
+                st.markdown("<h3 style='text-align: center; font-size:22px;'>📥 Descargas</h3>", unsafe_allow_html=True)
+                st.markdown(f"<h2 style='text-align: center;'>{st.session_state.get('num_downloads', 'No disponible')}</h2>", unsafe_allow_html=True)
+
             with col_kpi4:
-                st.markdown("<p style='text-align: center;'>🆕 Última actualización</p>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{last_update}</h2>", unsafe_allow_html=True)
+                st.markdown("<h3 style='text-align: center; font-size:22px;'>🆕 Último Release</h3>", unsafe_allow_html=True)
+                st.markdown(f"<h4 style='text-align: center;'>{st.session_state.get('last_release_date', 'No disponible')}</h4>", unsafe_allow_html=True)
+
+            with col_kpi5:
+                st.markdown("<h3 style='text-align: center; font-size:22px;'>📅 Review más reciente</h3>", unsafe_allow_html=True)
+                st.markdown(f"<h4 style='text-align: center;'>{most_recent_review_date}</h4>", unsafe_allow_html=True)
+
         else:
             st.warning("No hay datos en el rango de fechas seleccionado.")
 
