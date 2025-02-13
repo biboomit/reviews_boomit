@@ -8,16 +8,11 @@ import time
 import base64
 from datetime import datetime, timedelta
 import openai
+import requests  # Para consultas a la API de Apple
+from app_store_scraper import AppStore
 
 # 🔹 **Configurar la página antes de cualquier otro código**
-st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
-
-# 🔹 **Cargar credenciales desde `st.secrets`**
-try:
-    USERS = dict(st.secrets["users"])  # Convertir `st.secrets` en diccionario
-except Exception:
-    st.error("❌ Error al cargar las credenciales. Verifica `secrets.toml`.")
-    st.stop()
+st.set_page_config(page_title="Boomit - Social Intelligence", layout="wide")
 
 # 🔹 **Función de login**
 def login():
@@ -30,8 +25,8 @@ def login():
         if username in st.secrets["users"] and st.secrets["users"][username] == password:
             st.session_state["authenticated"] = True
             st.session_state["username"] = username
-            st.session_state["show_welcome"] = True  # Inicializar mensaje de bienvenida
-            st.rerun()  
+            st.session_state["show_welcome"] = True
+            st.rerun()
         else:
             st.error("❌ Correo o contraseña incorrectos")
 
@@ -41,369 +36,449 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state["authenticated"]:
     login()
-    st.stop()  # 🔹 **Detenemos la ejecución si no está autenticado**
+    st.stop()
 
-# 🔹 **Mostrar mensaje de bienvenida solo si `show_welcome` es True**
-if st.session_state.get("show_welcome", False):
-    st.success(f"✅ Bienvenido, {st.session_state['username']}")
-
-# Inicializar df_reviews como un DataFrame vacío con las columnas necesarias
-df_reviews = pd.DataFrame(columns=["at", "score", "content"])
-
-# Cargar stopwords desde un archivo externo
-with open("stopwords.txt", "r", encoding="utf-8") as f:
-    custom_stopwords = set(word.strip() for word in f.readlines())
-
-# Cargar imagen del logo
-logo_path = "company_logo.png"  # Asegúrate de que la imagen está en la misma carpeta del script
-
-# Usar HTML y CSS para alinear correctamente el logo y el título
-st.markdown(f"""
-    <div style="display: flex; align-items: center; gap: 17px;">
-        <img src="data:image/png;base64,{base64.b64encode(open(logo_path, 'rb').read()).decode()}" width="120">
-        <h1 style="margin: 5;">Dashboard de Gestión - Google Play Store</h1>
-    </div>
-""", unsafe_allow_html=True)
-
-# Selección del país y app
-country_mapping = {
-    "Argentina": "ar",
-    "Chile": "cl",
-    "Colombia": "co",
-    "Ecuador": "ec",
-    "El Salvador": "sv",
-    "Estados Unidos": "us",
-    "Guatemala": "gt",
-    "Honduras": "hn",
-    "México": "mx",
-    "Nicaragua": "ni",
-    "Panamá": "pa",
-    "Paraguay": "py",
-    "Perú": "pe"
-}
-
+# 🔹 **Selección de Plataforma y Aplicación**
+st.markdown("### 📱 Selecciona una plataforma y aplicación")
 col1, col2 = st.columns(2)
 with col1:
-    selected_country = st.selectbox("🌍 Seleccione el país de la tienda:", list(country_mapping.keys()), key="selected_country")
+    selected_platform = st.radio(
+        "📱 Plataforma:",
+        ["Google Play Store", "App Store (iOS)", "Comparar Ambas"],
+        horizontal=True
+    )
+
 with col2:
-    app_name = st.text_input("🔎 Ingrese el nombre de la aplicación:", key="app_name")
+    app_name = st.text_input("🔎 Nombre de la aplicación:")
 
-# 🔹 **Cuando el usuario elige un país y una app, ocultar el mensaje de bienvenida**
-if selected_country and app_name:
-    if st.session_state.get("show_welcome", False):  # Verifica si el mensaje de bienvenida sigue activo
-        st.session_state["show_welcome"] = False  # Ocultar mensaje de bienvenida
-        st.rerun()  # 🔹 **Forzar actualización de la página**
+# 🔹 **Selector de país (solo para Google Play)**
+country_mapping = {
+    "Argentina": "ar", "Chile": "cl", "Colombia": "co", "Ecuador": "ec",
+    "El Salvador": "sv", "Estados Unidos": "us", "Guatemala": "gt",
+    "Honduras": "hn", "México": "mx", "Nicaragua": "ni", "Panamá": "pa",
+    "Paraguay": "py", "Perú": "pe"
+}
 
-    country = country_mapping[selected_country]
-    search_results = search(app_name, lang="es", country=country)
+selected_country = None
+if selected_platform in ["Google Play Store", "Comparar Ambas"]:
+    selected_country = st.selectbox("🌍 Seleccione el país:", list(country_mapping.keys()))
 
-    if search_results:
-        app_id = search_results[0]['appId']
-        st.success(f"✅ Aplicación encontrada: {search_results[0]['title']} (ID: {app_id}) en {country.upper()}")
 
-        app_data = app(app_id, lang='es', country=country)
-        st.write("Datos obtenidos de app_data:", app_data)
-        num_downloads = app_data.get("realInstalls", "No disponible")  # realInstalls es más preciso
-        timestamp = app_data.get("updated", None) 
+# Definir el rango de los últimos 90 días
+today = datetime.today()
+ninety_days_ago = today - timedelta(days=90)
 
-        # Convertir `updated` a fecha legible
-        if isinstance(timestamp, int):
-            last_release_date = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
-        else:
-            last_release_date = "No disponible"
+# 🔹 **Inicialización de variables para evitar errores**
+app_id_android, app_id_ios = None, None
+df_reviews = pd.DataFrame(columns=["at", "score", "content"])
 
-        # Guardar valores en sesión para persistencia
-        st.session_state["num_downloads"] = num_downloads
-        st.session_state["last_release_date"] = last_release_date
+# Inicializar métricas con "No disponible" para evitar errores antes de cargar datos
+downloads_android = "No disponible"
+last_release_android = "No disponible"
+avg_score_android = "No disponible"
+total_reviews_android = "No disponible"
 
-        
-        if "df_reviews" not in st.session_state:
-            all_reviews = []
-            continuation_token = None
-            max_iterations = 10  
+avg_score_ios = "No disponible"
+total_reviews_ios = "No disponible"
 
-            with st.spinner("📥 Cargando reseñas..."):
-                for i in range(max_iterations):
-                    try:
-                        result, continuation_token = reviews(
-                            app_id, lang='es', country=country, count=200, continuation_token=continuation_token
-                        )
-                        all_reviews.extend(result)
-                        if not continuation_token:
-                            break
-                        time.sleep(2)
-                    except Exception as e:
-                        st.error(f"Error al obtener reseñas: {e}")
-                        break
+if app_name:
+    with st.spinner("🔄 Buscando y cargando datos de la aplicación..."):
+        country = country_mapping[selected_country] if selected_country else None
 
-            if all_reviews:  # Solo guardamos si hay datos
-                df_reviews = pd.DataFrame(all_reviews)
-                df_reviews["at"] = pd.to_datetime(df_reviews["at"])
-                df_reviews = df_reviews[df_reviews["at"] >= datetime.today() - timedelta(days=90)]
-                
-                # Agregar descargas al DataFrame en cada fila para poder filtrarlas luego
-                df_reviews["installs"] = num_downloads if isinstance(num_downloads, (int, float)) else 0
+        # **Buscar en Google Play Store**
+        if selected_platform in ["Google Play Store", "Comparar Ambas"] and selected_country:
+            try:
+                search_results = search(app_name, lang="es", country=country)
+                if search_results:
+                    app_id_android = search_results[0]['appId']
+                    st.success(f"✅ Google Play: {search_results[0]['title']} (ID: {app_id_android}) en {country.upper()}")
+            except Exception as e:
+                st.error(f"❌ Error buscando en Google Play: {e}")
 
-                # Guardar en la sesión de Streamlit
-                st.session_state["df_reviews"] = df_reviews  
+        # **Buscar en App Store**
+        if selected_platform in ["App Store (iOS)", "Comparar Ambas"]:
+            try:
+                url = f"https://itunes.apple.com/search?term={app_name.replace(' ', '+')}&country=us&entity=software"
+                response = requests.get(url, timeout=10).json()
+                if response.get("results"):
+                    app_id_ios = response["results"][0]["trackId"]
+                    st.success(f"✅ App Store: {response['results'][0]['trackName']} (ID: {app_id_ios})")
+            except requests.exceptions.Timeout:
+                st.error("❌ Error: La búsqueda en App Store tardó demasiado. Inténtalo de nuevo.")
+            except Exception as e:
+                st.error(f"❌ Error buscando en App Store: {e}")
 
-        df_reviews = st.session_state["df_reviews"]
+        # Si no se encuentra en ningún store
+        if not app_id_android and not app_id_ios:
+            st.error("❌ No se encontró la aplicación en ninguna tienda.")
+            st.stop()
 
-        # **FILTRO DE FECHAS**
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("📅 Desde:", df_reviews["at"].min())
-        with col2:
-            end_date = st.date_input("📅 Hasta:", df_reviews["at"].max())
+        # 🔹 **Obtener detalles de la aplicación**
+        if app_id_android:
+            try:
+                app_data = app(app_id_android, lang='es', country=country)
+                downloads_android = app_data.get("installs", "No disponible")
+                last_release_android = datetime.fromtimestamp(app_data.get("updated", 0)).strftime("%Y-%m-%d %H:%M") if app_data.get("updated") else "No disponible"
+                avg_score_android = round(app_data.get("score", 0), 1)  # Redondear a 1 decimal
+                total_reviews_android = app_data.get("reviews", "No disponible")
+            except Exception as e:
+                st.error(f"❌ Error obteniendo datos de Google Play: {e}")
 
-        #Verificar que installs realmente está en df_reviews
-        st.write("Columnas de df_reviews antes de filtrar:", df_reviews.columns)
-        st.write("Vista previa de df_reviews:", df_reviews.head())
-        # Filtrar df_reviews basado en la selección de fechas
-        df_filtered = df_reviews[(df_reviews["at"] >= pd.to_datetime(start_date)) & (df_reviews["at"] <= pd.to_datetime(end_date))]
+# Cargar reseñas de App Store
+if app_id_ios:
+    try:
+        ios_app = AppStore(country="us", app_name=app_name, app_id=app_id_ios)
+        ios_app.review()
+        df_reviews_ios = pd.DataFrame(ios_app.reviews)
 
-        # Calcular descargas aproximadas basadas en reseñas dentro del período seleccionado
-        if not df_filtered.empty:
-            total_reviews = df_reviews.shape[0]  # Total de reseñas en todo el período
-            filtered_reviews_count = df_filtered.shape[0]  # Reseñas dentro del rango filtrado
+        # Verificar si hay reseñas antes de continuar
+        if not df_reviews_ios.empty:
+            # Renombrar columnas para que coincidan con Android
+            column_mapping = {"date": "at", "rating": "score"}
+            df_reviews_ios.rename(columns=column_mapping, inplace=True)
 
-            # Estimación de descargas basadas en la proporción de reseñas en el período filtrado
-            if total_reviews > 0:
-                num_downloads_filtered = int((filtered_reviews_count / total_reviews) * st.session_state["num_downloads"])
+            # Convertir la fecha si existe
+            if "at" in df_reviews_ios.columns:
+                df_reviews_ios["at"] = pd.to_datetime(df_reviews_ios["at"], errors="coerce")
             else:
-                num_downloads_filtered = "No disponible"
+                st.warning("⚠️ No se encontraron fechas válidas en las reseñas de iOS.")
+                df_reviews_ios["at"] = pd.NaT  # Evitar errores en el filtrado posterior
+
+            # Asegurar que existe la columna de puntaje
+            if "score" not in df_reviews_ios.columns:
+                st.warning("⚠️ No se encontró la columna 'rating' en iOS. Se omitirán calificaciones.")
+                df_reviews_ios["score"] = None  # Agregar columna vacía si no existe
+
+            df_reviews_ios["source"] = "iOS"
         else:
-            num_downloads_filtered = "No disponible"
+            st.warning("⚠️ No se encontraron reseñas de iOS.")
 
+    except Exception as e:
+        st.error(f"❌ Error obteniendo reseñas de App Store: {e}")
 
+# 🔹 **Carga de Reseñas**
+df_reviews_android = pd.DataFrame()
+df_reviews_ios = pd.DataFrame()
 
-        # Verificar si hay datos en el rango seleccionado
-        if not df_filtered.empty:
-            avg_score = df_filtered["score"].mean()  # Puntuación promedio
-            total_reviews = df_filtered.shape[0]  # Total de reseñas en el período seleccionado
+if app_id_android or app_id_ios:
+    with st.spinner("📥 Cargando reseñas..."):
+        # Cargar reseñas de Google Play
+        if app_id_android:
+            try:
+                reviews_android, _ = reviews(
+                    app_id_android, lang="es", country=country, count=200
+                )
+                df_reviews_android = pd.DataFrame(reviews_android)
 
-            # Última actualización basada en la fecha más reciente del filtro
-            last_update = df_filtered["at"].max().strftime("%Y-%m-%d")
-
-            # 📅 Nueva métrica: Fecha del comentario más reciente basado en el filtro de fechas
-            most_recent_review_date = df_filtered["at"].max().strftime("%Y-%m-%d %H:%M") if not df_filtered.empty else "No disponible"
-
-            # Actualizar las métricas en las tarjetas
-            st.markdown("---")
-            st.markdown("<h3 style='text-align: center;'>📊 Métricas de la Aplicación</h3>", unsafe_allow_html=True)
-
-            col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
-            
-            with col_kpi1:
-                st.markdown("<h3 style='text-align: center; font-size:22px;'>⭐ Puntuación</h3>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{round(avg_score, 2)}</h2>", unsafe_allow_html=True)
-
-            with col_kpi2:
-                st.markdown("<h3 style='text-align: center; font-size:22px;'>💬 Total Reseñas</h3>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{total_reviews:,}</h2>", unsafe_allow_html=True)
-
-            with col_kpi3:
-                st.markdown("<h3 style='text-align: center; font-size:22px;'>📥 Descargas</h3>", unsafe_allow_html=True)
-                st.markdown(f"<h2 style='text-align: center;'>{st.session_state.get('num_downloads', 'No disponible')}</h2>", unsafe_allow_html=True)
-
-            with col_kpi4:
-                st.markdown("<h3 style='text-align: center; font-size:22px;'>🆕 Último Release</h3>", unsafe_allow_html=True)
-                st.markdown(f"<h4 style='text-align: center;'>{st.session_state.get('last_release_date', 'No disponible')}</h4>", unsafe_allow_html=True)
-
-            with col_kpi5:
-                st.markdown("<h3 style='text-align: center; font-size:22px;'>📅 Review más reciente</h3>", unsafe_allow_html=True)
-                st.markdown(f"<h4 style='text-align: center;'>{most_recent_review_date}</h4>", unsafe_allow_html=True)
-
-        else:
-            st.warning("No hay datos en el rango de fechas seleccionado.")
-
-        # Línea separadora antes de la selección de agregación
-        st.markdown("---")    
-
-        # **Selector de agregación**
-        st.markdown("### 📊 Selecciona el nivel de agregación:")
-        agg_option = st.radio("", ["Diario", "Semanal", "Mensual", "Anual"], index=1, horizontal=True)
-
-        if agg_option == "Diario":
-            df_reviews["date"] = df_reviews["at"].dt.date  # Mantener en formato de fecha
-        elif agg_option == "Semanal":
-            df_reviews["date"] = df_reviews["at"].dt.to_period("W").apply(lambda r: r.start_time)
-        elif agg_option == "Mensual":
-            df_reviews["date"] = df_reviews["at"].dt.to_period("M").apply(lambda r: r.start_time)
-        elif agg_option == "Anual":
-            df_reviews["date"] = df_reviews["at"].dt.to_period("Y").apply(lambda r: r.start_time)
-        # Convertir todo a timestamps después de la conversión de periodos para evitar errores
-        df_reviews["date"] = pd.to_datetime(df_reviews["date"], errors='coerce')
-
-
-
-        # **Gráfico de evolución**
-        grouped_counts = df_reviews.groupby("date").size().reset_index(name="Cantidad de Reseñas")
-        grouped_avg_score = df_reviews.groupby("date")["score"].mean().reset_index(name="Calificación Promedio")
-
-        fig1 = go.Figure()
-
-        # Agregar las barras rojas de cantidad de reseñas con etiquetas de valores
-        fig1.add_trace(go.Bar(
-            x=grouped_counts['date'], 
-            y=grouped_counts['Cantidad de Reseñas'], 
-            name='Cantidad de Reseñas', 
-            marker=dict(color='red'), 
-            opacity=0.7,
-            yaxis='y1',
-            text=grouped_counts['Cantidad de Reseñas'],  # Etiquetas de valores
-            textposition='outside'  # Ubicación de las etiquetas
-        ))
-
-        # Agregar la línea azul de calificación promedio con etiquetas de valores
-        fig1.add_trace(go.Scatter(
-            x=grouped_avg_score['date'], 
-            y=grouped_avg_score['Calificación Promedio'], 
-            mode='lines+markers+text',  # Se agregan etiquetas de valores
-            name='Calificación Promedio', 
-            line=dict(color='blue', width=2), 
-            yaxis='y2',
-            text=grouped_avg_score['Calificación Promedio'].round(2),  # Etiquetas con 2 decimales
-            textposition='top center'  # Ubicación de las etiquetas
-        ))
-
-        # Configurar el diseño del gráfico
-        fig1.update_layout(
-            title="📈 Evolución de reseñas",
-            xaxis=dict(title="Fecha", tickangle=-45, tickformat="%b %Y"),
-            yaxis=dict(title="Cantidad de Reseñas", side='left'),
-            yaxis2=dict(title="Calificación Promedio", overlaying='y', side='right'),
-            legend=dict(x=0, y=1.1, orientation="h"),
-            barmode="group"
-        )
-
-        # Mostrar el gráfico en Streamlit
-        st.plotly_chart(fig1, use_container_width=True)
-
-
-       # **Histograma y Nube de Palabras**
-        col1, col2 = st.columns(2)
-        df_reviews['score_label'] = df_reviews['score'].apply(lambda x: f'{int(x)}⭐')
-
-        with col1:
-            st.markdown("### 📊 Distribución de Calificaciones") 
-            # Crear histograma con etiquetas
-            fig_hist = px.histogram(df_reviews, x='score_label', nbins=5, title="", text_auto=True)      
-
-            # Ajustar altura, diseño y eliminar títulos de ejes
-            fig_hist.update_layout(
-                height=400, 
-                bargap=0.1,
-                xaxis_title="",  # Elimina el título del eje X
-                yaxis_title=""   # Elimina el título del eje Y
-            )     
-            # Mostrar el histograma en Streamlit
-            st.plotly_chart(fig_hist, use_container_width=True)
-
-
-        with col2:
-            st.markdown("### ☁️ Nube de Palabras en Reseñas")
-            text = " ".join(str(review) for review in df_reviews["content"].dropna())
-            wordcloud = WordCloud(width=800, height=450, background_color='white', stopwords=custom_stopwords).generate(text)
-            st.image(wordcloud.to_array(), use_container_width=True)
-
-
-
-        # **Selector de Top Comentarios**
-        st.markdown("---")
-        comment_option = st.selectbox("📌 Selecciona tipo de comentarios:", ["Recientes", "Mejores", "Peores"])
-
-        if not df_filtered.empty:
-            if comment_option == "Recientes":
-                comments = df_filtered[['at', 'score', 'content']].sort_values(by='at', ascending=False).head(10)
-            elif comment_option == "Mejores":
-                comments = df_filtered[['score', 'content', 'at']].sort_values(by='score', ascending=False).head(10)
-            else:
-                comments = df_filtered[['score', 'content', 'at']].sort_values(by='score', ascending=True).head(10)
-
-            # **Convertir la columna "score" en estrellas**
-            comments["score"] = comments["score"].apply(lambda x: "⭐" * int(x))
-
-            # **Renombrar columnas**
-            comments = comments.rename(columns={"at": "Fecha", "content": "Comentario", "score": "Calificación"})
-
-            # **Mostrar la tabla si hay comentarios**
-            st.dataframe(comments, hide_index=True, use_container_width=True)
-        else:
-            st.warning("No hay comentarios en el rango de fechas seleccionado.")
-
-
-        # **Estilos para ajustar ancho fijo en las dos primeras columnas y expandir la tercera**
-        styled_df = comments.style.set_table_styles([
-            {"selector": "th", "props": [("text-align", "center")]},  # Centrar encabezados
-            {"selector": "td", "props": [("text-align", "center")]},  # Centrar celdas
-            {"selector": "td:nth-child(1)", "props": [("width", "150px")]},  # Fijar ancho de "Fecha"
-            {"selector": "td:nth-child(2)", "props": [("width", "100px")]},  # Fijar ancho de "Calificación"
-            {"selector": "td:nth-child(3)", "props": [("width", "auto"), ("white-space", "normal"), ("word-wrap", "break-word")]}  # Expandir "Comentario"
-        ])
-
-
-# Configuración de OpenAI
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-openai.api_key = OPENAI_API_KEY
-
-if not df_reviews.empty:
-            # **Análisis con Asistente de OpenAI**
-            st.markdown("---")
-            st.markdown("### 🤖 Análisis de Boomit One AI sobre las Reseñas")
-
-            if "content" in df_reviews.columns:
-                filtered_reviews = df_reviews[(df_reviews["at"] >= pd.to_datetime(start_date)) & (df_reviews["at"] <= pd.to_datetime(end_date))]
-                date_range_text = f"Las siguientes reviews corresponden al período desde {start_date} hasta {end_date}.\n\n"
-                comments_text = date_range_text + "\n".join(filtered_reviews["content"].dropna().head(50).tolist()).strip()
-
-
-                
-                if comments_text:  # Solo llamar a OpenAI si hay contenido válido
-                    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]  # Reemplaza con tu clave de OpenAI
-                    openai.api_key = OPENAI_API_KEY
-                    
-                    def get_openai_insights(comments_text):
-                        """Genera insights a partir de los comentarios usando un asistente preexistente de OpenAI"""
-                        try:
-                            client = openai.OpenAI(api_key=OPENAI_API_KEY)  # Crear cliente de OpenAI
-
-                            # Crear un hilo de conversación
-                            thread = client.beta.threads.create()
-
-                            # Enviar mensaje al asistente en el hilo creado
-                            client.beta.threads.messages.create(
-                                thread_id=thread.id,
-                                role="user",
-                                content=comments_text
-                            )
-
-                            # Ejecutar el asistente en el hilo
-                            run = client.beta.threads.runs.create(
-                                thread_id=thread.id,
-                                assistant_id=st.secrets["ASSISTANT_ID"]
-                            )
-
-                            # Mostrar indicador de carga
-                            with st.spinner("🔄 Generando insights, por favor espera..."):
-                                # Esperar la respuesta del asistente
-                                while run.status != "completed":
-                                    time.sleep(2)  # Espera 2 segundos antes de revisar el estado nuevamente
-                                    run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-
-                            # Obtener el mensaje de respuesta del asistente
-                            messages = client.beta.threads.messages.list(thread_id=thread.id)
-                            response_text = messages.data[0].content[0].text.value  # Extraer contenido
-
-                            return response_text
-
-                        except Exception as e:
-                            return f"Error al obtener insights de OpenAI: {e}"
-                    
-                    insights = get_openai_insights(comments_text)
-                    st.markdown("#### 🔍 Insights Generados")
-                    st.info(insights)
+                # Verificar que la columna "at" existe antes de seguir
+                if "at" in df_reviews_android.columns:
+                    df_reviews_android["at"] = pd.to_datetime(df_reviews_android["at"], errors="coerce")
+                    df_reviews_android = df_reviews_android[df_reviews_android["at"] >= ninety_days_ago]  # Filtrar últimos 90 días
+                    df_reviews_android["source"] = "Android"
                 else:
-                    st.warning("No hay suficientes comentarios para generar insights.")
+                    df_reviews_android = pd.DataFrame()  # Reiniciar si no tiene "at"
+
+            except Exception as e:
+                st.error(f"❌ Error obteniendo reseñas de Google Play: {e}")
+
+        # Cargar reseñas de App Store
+        if app_id_ios:
+            try:
+                ios_app = AppStore(country="us", app_name=app_name, app_id=app_id_ios)
+                ios_app.review(how_many=1000)  # Obtener hasta 1000 reseñas para mejor filtrado
+                df_reviews_ios = pd.DataFrame(ios_app.reviews)
+
+                # Verificar si hay reseñas antes de continuar
+                if not df_reviews_ios.empty:
+                    # Verificar si la columna "date" existe en los datos de iOS
+                    if "date" in df_reviews_ios.columns:
+                        df_reviews_ios.rename(columns={"date": "at"}, inplace=True)  # Renombrar "date" a "at"
+                        df_reviews_ios["at"] = pd.to_datetime(df_reviews_ios["at"], errors="coerce")
+                        df_reviews_ios = df_reviews_ios[df_reviews_ios["at"] >= ninety_days_ago]  # Filtrar últimos 90 días
+                        df_reviews_ios["source"] = "iOS"
+                    else:
+                        st.warning("⚠️ No se encontraron fechas válidas en las reseñas de iOS.")
+                        df_reviews_ios = pd.DataFrame()  # Vaciar si no tiene fechas
+
+                    # Verificar si la columna "rating" existe
+                    if "rating" in df_reviews_ios.columns:
+                        df_reviews_ios.rename(columns={"rating": "score"}, inplace=True)  # Renombrar "rating" a "score"
+                    else:
+                        st.warning("⚠️ No se encontró la columna 'rating' en iOS. Se omitirán calificaciones.")
+                        df_reviews_ios["score"] = None  # Agregar columna vacía si no existe
+
+                else:
+                    st.warning("⚠️ No se encontraron reseñas de iOS.")
+
+            except Exception as e:
+                st.error(f"❌ Error obteniendo reseñas de App Store: {e}")
+
+# **Combinar reseñas de ambas plataformas si están disponibles**
+df_reviews = pd.concat([df_reviews_android, df_reviews_ios], ignore_index=True)
+
+
+# **FILTRO DE FECHAS**
+if app_name and (app_id_android or app_id_ios):  # Solo muestra si se ha buscado una app
+    if df_reviews.empty:
+        st.warning("⚠️ No hay reseñas disponibles para esta aplicación.")
+        df_filtered = pd.DataFrame()  # Evitar errores en el código posterior
+    elif "at" not in df_reviews.columns or df_reviews["at"].dropna().empty:
+        st.warning("⚠️ No hay fechas válidas en las reseñas obtenidas.")
+        df_filtered = pd.DataFrame()
+    else:
+        st.markdown("---")
+        st.markdown("### 📅 Filtrar reseñas por fecha")
+
+        # Convertir la columna 'at' a datetime si aún no lo está
+        if not pd.api.types.is_datetime64_any_dtype(df_reviews["at"]):
+            df_reviews["at"] = pd.to_datetime(df_reviews["at"], errors='coerce')
+
+        # Evitar errores si todas las fechas son NaT
+        if df_reviews["at"].dropna().empty:
+            st.warning("⚠️ No hay fechas válidas en las reseñas obtenidas.")
+            df_filtered = pd.DataFrame()
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("📅 Desde:", value=df_reviews["at"].min())
+            with col2:
+                end_date = st.date_input("📅 Hasta:", value=df_reviews["at"].max())
+
+            # Aplicar el filtro de fechas
+            df_filtered = df_reviews[(df_reviews["at"] >= pd.to_datetime(start_date)) & 
+                                     (df_reviews["at"] <= pd.to_datetime(end_date))]
+
+            # Verificación después del filtrado
+            if df_filtered.empty:
+                st.warning("⚠️ No hay reseñas en el rango de fechas seleccionado.")
+else:
+    df_filtered = pd.DataFrame()
+    st.warning("⚠️ No hay reseñas disponibles para filtrar.")
+
+
+if not df_filtered.empty:
+    # Para Android
+    android_reviews = df_filtered[df_filtered["source"] == "Android"]
+    avg_score_android = android_reviews["score"].mean() if not android_reviews.empty else "No disponible"
+    total_reviews_android = len(android_reviews) if not android_reviews.empty else "No disponible"
+
+    # Para iOS
+    ios_reviews = df_filtered[df_filtered["source"] == "iOS"]
+    avg_score_ios = ios_reviews["score"].mean() if not ios_reviews.empty else "No disponible"
+    total_reviews_ios = len(ios_reviews) if not ios_reviews.empty else "No disponible"
+else:
+    avg_score_android = "No disponible"
+    total_reviews_android = "No disponible"
+    avg_score_ios = "No disponible"
+    total_reviews_ios = "No disponible"
+
+# Verifica que se haya ingresado una app, seleccionado un país y una plataforma
+if app_name and selected_country and selected_platform and (app_id_android or app_id_ios):
+    # 🔹 **Mostrar KPIs combinados con valores filtrados**
+    st.markdown("---")
+    st.markdown("<h3 style='text-align: center;'>📊 Métricas de la Aplicación</h3>", unsafe_allow_html=True)
+
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns([1, 1, 1, 1])
+    st.markdown("---")
+
+    st.markdown("""
+        <style>
+            .kpi-container {
+                display: flex;
+                justify-content: center;
+                gap: 15px;
+                flex-wrap: wrap;
+            }
+            .kpi-box {
+                background-color: rgba(255, 100, 100, 0.9);
+                padding: 15px;
+                border-radius: 15px;
+                text-align: center;
+                font-weight: bold;
+                box-shadow: 4px 4px 10px rgba(0,0,0,0.2);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                min-height: 130px;
+                max-width: 100%;
+                word-wrap: break-word;
+            }
+            .kpi-title { font-size: 18px; color: #fff; font-weight: bold; text-align: center; }
+            .kpi-value { font-size: 16px; color: #fff; font-weight: bold; text-align: center; line-height: 1.4; }
+        </style>
+    """, unsafe_allow_html=True)
+
+
+
+    st.markdown("""
+        <style>
+            .kpi-container {
+                display: flex;
+                justify-content: center;
+                gap: 15px;
+                flex-wrap: wrap;
+            }
+            .kpi-box {
+                background-color: rgba(255, 100, 100, 0.9);
+                padding: 15px;
+                border-radius: 15px;
+                text-align: center;
+                font-weight: bold;
+                box-shadow: 4px 4px 10px rgba(0,0,0,0.2);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                min-height: 130px;
+                max-width: 100%;
+                word-wrap: break-word;
+            }
+            .kpi-title { font-size: 18px; color: #fff; font-weight: bold; text-align: center; }
+            .kpi-value { font-size: 16px; color: #fff; font-weight: bold; text-align: center; line-height: 1.4; }
+        </style>
+    """, unsafe_allow_html=True)
+
+
+    def render_kpi(title, android_value, ios_value, is_integer=False):
+        if is_integer:
+            android_display = f"{int(android_value):,}" if isinstance(android_value, (float, int)) else android_value
+            ios_display = f"{int(ios_value):,}" if isinstance(ios_value, (float, int)) else ios_value
+        else:
+            android_display = f"{android_value:.1f}" if isinstance(android_value, (float, int)) else android_value
+            ios_display = f"{ios_value:.1f}" if isinstance(ios_value, (float, int)) else ios_value
+
+        return f"""
+            <div class="kpi-box">
+                <div class="kpi-title">{title}</div>
+                <div class="kpi-value">Android: {android_display}</div>
+                <div class="kpi-value">iOS: {ios_display}</div>
+            </div>
+        """
+
+    with col_kpi1:
+        st.markdown(render_kpi("⭐ Puntuación", avg_score_android, avg_score_ios), unsafe_allow_html=True)
+    with col_kpi2:
+        st.markdown(render_kpi("💬 Reseñas", total_reviews_android, total_reviews_ios, is_integer=True), unsafe_allow_html=True)  # Aquí aseguramos que sean enteros
+    with col_kpi3:
+        st.markdown(render_kpi("📥 Descargas", downloads_android, "No disponible"), unsafe_allow_html=True)
+    with col_kpi4:
+        st.markdown(render_kpi("🆕 Última Actualización", last_release_android, "No disponible"), unsafe_allow_html=True)
+
+
+# 🔹 **Selector de nivel de agregación**
+if not df_reviews.empty:
+    st.markdown("---")
+    st.markdown("### 📊 Selecciona el nivel de agregación:")
+    agg_option = st.radio("", ["Diario", "Semanal", "Mensual", "Anual"], index=1, horizontal=True)
+
+    # Convertir la columna 'at' a datetime si no lo es
+    df_reviews["at"] = pd.to_datetime(df_reviews["at"], errors='coerce')
+
+    # **Aplicar agregación según la selección**
+    if agg_option == "Diario":
+        df_reviews["date"] = df_reviews["at"].dt.date  # Mantener en formato de fecha
+    elif agg_option == "Semanal":
+        df_reviews["date"] = df_reviews["at"].dt.to_period("W").apply(lambda r: r.start_time)
+    elif agg_option == "Mensual":
+        df_reviews["date"] = df_reviews["at"].dt.to_period("M").apply(lambda r: r.start_time)
+    elif agg_option == "Anual":
+        df_reviews["date"] = df_reviews["at"].dt.to_period("Y").apply(lambda r: r.start_time)
+
+    # Convertir todo a timestamps después de la conversión de periodos
+    df_reviews["date"] = pd.to_datetime(df_reviews["date"], errors='coerce')
+
+    # **Agrupar por fecha y plataforma**
+    grouped_counts = df_reviews.groupby(["date", "source"]).size().reset_index(name="Cantidad de Reseñas")
+    grouped_avg_score = df_reviews.groupby(["date", "source"])["score"].mean().reset_index(name="Calificación Promedio")
+
+    # 🔹 **Corrección para iOS: NO rellenar fechas vacías, solo mantener datos reales**
+    if not grouped_counts.empty:
+        android_data = grouped_counts[grouped_counts["source"] == "Android"]
+        ios_data = grouped_counts[grouped_counts["source"] == "iOS"]
+
+        android_avg_score = grouped_avg_score[grouped_avg_score["source"] == "Android"]
+        ios_avg_score = grouped_avg_score[grouped_avg_score["source"] == "iOS"]
+
+# # 🔹 **Aplicar el filtro de fechas al dataframe antes de graficar**
+if not df_filtered.empty:
+    filtered_counts = grouped_counts[(grouped_counts["date"] >= pd.to_datetime(start_date)) & 
+                                     (grouped_counts["date"] <= pd.to_datetime(end_date))]
+    
+    filtered_avg_score = grouped_avg_score[(grouped_avg_score["date"] >= pd.to_datetime(start_date)) & 
+                                           (grouped_avg_score["date"] <= pd.to_datetime(end_date))]
+    
+    # 🔹 **Fusionar y alinear los datos de ambas plataformas**
+    all_dates = pd.date_range(start=start_date, end=end_date, freq="D")
+    df_dates = pd.DataFrame({"date": all_dates})
+    
+    merged_counts = df_dates.merge(filtered_counts, on="date", how="left").fillna(0)
+    merged_avg_score = df_dates.merge(filtered_avg_score, on="date", how="left").fillna(0)
+
+    # 🔹 **Convertir la estructura a formato de barras agrupadas**
+    pivot_counts = merged_counts.pivot(index="date", columns="source", values="Cantidad de Reseñas").fillna(0)
+    pivot_avg_score = merged_avg_score.pivot(index="date", columns="source", values="Calificación Promedio").fillna(0)
+
+    # Asegurar que ambas columnas existan en pivot_counts
+if "Android" not in pivot_counts.columns:
+    pivot_counts["Android"] = 0
+if "iOS" not in pivot_counts.columns:
+    pivot_counts["iOS"] = 0
+
+# 🔹 **Crear gráfico con barras agrupadas**
+fig1 = go.Figure()
+
+# Agregar las barras de Android
+fig1.add_trace(go.Bar(
+    x=pivot_counts.index,
+    y=pivot_counts["Android"],
+    name="Android",
+    marker=dict(color="red"),
+))
+
+# Agregar las barras de iOS
+fig1.add_trace(go.Bar(
+    x=pivot_counts.index,
+    y=pivot_counts["iOS"],
+    name="iOS",
+    marker=dict(color="green"),
+))
+
+# 🔹 **Agregar líneas de calificación promedio**
+if "Android" in pivot_avg_score.columns and not pivot_avg_score["Android"].isna().all():
+    fig1.add_trace(go.Scatter(
+        x=pivot_avg_score.index,
+        y=pivot_avg_score["Android"],
+        mode="lines+markers",
+        name="Calificación Promedio - Android",
+        line=dict(color="blue", width=2),
+        yaxis="y2",
+    ))
+
+if "iOS" in pivot_avg_score.columns and not pivot_avg_score["iOS"].isna().all():
+    fig1.add_trace(go.Scatter(
+        x=pivot_avg_score.index,
+        y=pivot_avg_score["iOS"],
+        mode="lines+markers",
+        name="Calificación Promedio - iOS",
+        line=dict(color="orange", width=2),
+        yaxis="y2",
+    ))
+
+# 🔹 **Configurar diseño del gráfico con barras agrupadas**
+fig1.update_layout(
+    title="📈 Evolución de reseñas",
+    xaxis=dict(title="Fecha", tickangle=-45, tickformat="%b %d"),
+    yaxis=dict(title="Cantidad de Reseñas", side="left"),
+    yaxis2=dict(title="Calificación Promedio", overlaying="y", side="right"),
+    legend=dict(x=0, y=1.1, orientation="h"),
+    barmode="group",  # **AGRUPAR LAS BARRAS CORRECTAMENTE**
+)
+
+# Mostrar el gráfico en Streamlit
+st.plotly_chart(fig1, use_container_width=True)
+
+
+
 
 

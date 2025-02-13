@@ -8,10 +8,10 @@ import time
 import base64
 from datetime import datetime, timedelta
 import openai
-from app_store_scraper import AppStore
+
 
 # 🔹 **Configurar la página antes de cualquier otro código**
-st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
+st.set_page_config(page_title="Boomit - Social Intelligence", layout="wide")
 
 # 🔹 **Cargar credenciales desde `st.secrets`**
 try:
