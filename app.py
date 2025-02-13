@@ -62,7 +62,7 @@ logo_path = "company_logo.png"  # Asegúrate de que la imagen está en la misma 
 st.markdown(f"""
     <div style="display: flex; align-items: center; gap: 17px;">
         <img src="data:image/png;base64,{base64.b64encode(open(logo_path, 'rb').read()).decode()}" width="120">
-        <h1 style="margin: 5;">Dashboard de Gestión - Google Play Store</h1>
+        <h1 style="margin: 5;">Boomit - Social Intelligence</h1>
     </div>
 """, unsafe_allow_html=True)
 
