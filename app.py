@@ -8,6 +8,7 @@ import time
 import base64
 from datetime import datetime, timedelta
 import openai
+from app_store_scraper import AppStore
 
 # 🔹 **Configurar la página antes de cualquier otro código**
 st.set_page_config(page_title="Dashboard de Gestión - Google Play Store", layout="wide")
@@ -64,6 +65,15 @@ st.markdown(f"""
         <h1 style="margin: 5;">Dashboard de Gestión - Google Play Store</h1>
     </div>
 """, unsafe_allow_html=True)
+
+# Inicializar variables con valores por defecto para evitar errores si no se selecciona una app
+avg_score_android = "No disponible"
+avg_score_ios = "No disponible"
+total_reviews_android = "No disponible"
+total_reviews_ios = "No disponible"
+downloads = "No disponible"
+last_release_date_android = "No disponible"
+last_release_date_ios = "No disponible"
 
 # Selección del país y app
 country_mapping = {
